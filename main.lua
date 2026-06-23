@@ -177,9 +177,6 @@ MainGroup:AddToggle('ClearObstaclesToggle', {
 
             -- Connect to both ChildAdded and DescendantAdded for maximum coverage
             obstacleConnection = Workspace.DescendantAdded:Connect(checkAndDestroy)
-            Workspace.ChildAdded:Connect(function(obj)
-                if obstacleNames[obj.Name] then nukeObj(obj) end
-            end)
 
             -- Initial deep scan
             for _, v in next, Workspace:GetDescendants() do
@@ -230,136 +227,96 @@ BypassGroup:AddToggle('AntiLimbo', {
     Callback = function(Value)
         limboEnabled = Value
         if limboEscapeConnection then limboEscapeConnection:Disconnect() ; limboEscapeConnection = nil end
-        if Value then
-            local limboKillPositions = {}
-            local npcCache = {}
-            local lastHealthCheck = 100
+        
+        local clonesFolder = Workspace:FindFirstChild("LimboKill_Clones")
+        if clonesFolder then pcall(function() clonesFolder:Destroy() end) end
 
-            -- Strategy A: Cache coordinates, generate visually identical safe clones, and delete the originals on client
-            local function tryDisable(child)
-                if child.Name ~= "LimboKill" or not child:IsDescendantOf(game) then return end
-                
-                -- Cache position for distance monitoring before destruction
-                local pos
-                if child:IsA("BasePart") then
-                    pos = child.Position
-                else
-                    pos = child:GetPivot().Position
-                end
-
-                if pos then
-                    local alreadyCached = false
-                    for _, cachedPos in next, limboKillPositions do
-                        if (cachedPos - pos).Magnitude < 1 then
-                            alreadyCached = true
-                            break
-                        end
+        local function setCharacterCanTouch(state)
+            local char = LocalPlayer.Character
+            if char then
+                for _, part in next, char:GetDescendants() do
+                    if part:IsA("BasePart") then
+                        pcall(function() part.CanTouch = state end)
                     end
-                    if not alreadyCached then
-                        table.insert(limboKillPositions, pos)
-                    end
-                end
-
-                -- Create visual clone with safe properties
-                local cloneName = child.Name .. "_VisualClone"
-                if not Workspace:FindFirstChild(cloneName) then
-                    local success, clone = pcall(function() return child:Clone() end)
-                    if success and clone then
-                        clone.Name = cloneName
-                        if clone:IsA("BasePart") then
-                            clone.Transparency = 0.5
-                            clone.CanCollide = false
-                            clone.CanTouch = false
-                            clone.Anchored = true
-                        end
-                        for _, sub in next, clone:GetDescendants() do
-                            if sub:IsA("TouchTransmitter") or sub:IsA("Script") or sub:IsA("LocalScript") then
-                                pcall(function() sub:Destroy() end)
-                            end
-                            if sub:IsA("BasePart") then
-                                sub.Transparency = 0.5
-                                sub.CanCollide = false
-                                sub.CanTouch = false
-                                sub.Anchored = true
-                            end
-                        end
-                        clone.Parent = Workspace
-                    end
-                end
-
-                -- Destroy the original entirely so local scripts can't query or detect collisions
-                pcall(function() child:Destroy() end)
-            end
-
-            -- Strategy B: Heartbeat proximity escape + entity/NPC evasion
-            limboEscapeConnection = RunService.Heartbeat:Connect(function()
-                local char = LocalPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
-                if not (root and hum) then lastHealthCheck = 100 ; return end
-
-                -- Refresh caches every ~0.5s
-                if math.random() < 0.033 or #npcCache == 0 then
-                    npcCache = {}
-                    for _, v in next, Workspace:GetDescendants() do
-                        if v.Name == "LimboKill" then
-                            tryDisable(v)
-                        elseif v:IsA("Model") and v:FindFirstChildOfClass("Humanoid") then
-                            if not Players:GetPlayerFromCharacter(v) then
-                                local name = v.Name:lower()
-                                if not (name:find("clerk") or name:find("receptionist") or name:find("shop") or name:find("dummy") or name:find("guide")) then
-                                    local npcRoot = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso") or v:FindFirstChild("UpperTorso")
-                                    if npcRoot then
-                                        table.insert(npcCache, npcRoot)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-
-                -- 1. Proximity escape for cached LimboKill zones (12 studs)
-                for _, pos in next, limboKillPositions do
-                    if (pos - root.Position).Magnitude < 12 then
-                        root.CFrame = root.CFrame + Vector3.new(0, 30, 0)
-                        break
-                    end
-                end
-
-                -- 2. Proximity escape for NPCs/Hostile Entities (18 studs)
-                for _, npcRoot in next, npcCache do
-                    if npcRoot:IsDescendantOf(game) then
-                        if (npcRoot.Position - root.Position).Magnitude < 18 then
-                            root.CFrame = root.CFrame + Vector3.new(0, 30, 0)
-                            break
-                        end
-                    end
-                end
-
-                -- 3. Health-drop escape: if we suddenly lost >8 HP in one frame, teleport up
-                local hp = hum.Health
-                if lastHealthCheck - hp > 8 then
-                    root.CFrame = root.CFrame + Vector3.new(0, 30, 0)
-                end
-                lastHealthCheck = hp
-            end)
-
-            -- Initial scan
-            for _, child in next, Workspace:GetDescendants() do
-                if child.Name == "LimboKill" then tryDisable(child) end
-            end
-
-            Workspace.DescendantAdded:Connect(function(child)
-                if limboEnabled and child.Name == "LimboKill" then tryDisable(child) end
-            end)
-        else
-            -- Clean up the visual clones when disabled
-            for _, v in next, Workspace:GetDescendants() do
-                if v.Name:find("_VisualClone") then
-                    pcall(function() v:Destroy() end)
                 end
             end
         end
+        
+        if not Value then
+            setCharacterCanTouch(true)
+            return
+        end
+
+        local limboKillData = {}
+        
+        clonesFolder = Instance.new("Folder")
+        clonesFolder.Name = "LimboKill_Clones"
+        clonesFolder.Parent = Workspace
+
+        local function tryDisable(child)
+            if child.Name ~= "LimboKill" or not child:IsDescendantOf(game) then return end
+            
+            local cf = child:IsA("BasePart") and child.CFrame or child:GetPivot()
+            local size = child:IsA("BasePart") and child.Size or Vector3.new(10, 10, 10)
+            table.insert(limboKillData, {CFrame = cf, Size = size})
+
+            local success, clone = pcall(function() return child:Clone() end)
+            if success and clone then
+                clone.Name = "LimboKill_VisualClone"
+                if clone:IsA("BasePart") then
+                    clone.Transparency = 0.5
+                    clone.CanCollide = false
+                    clone.CanTouch = false
+                    clone.Anchored = true
+                end
+                for _, sub in next, clone:GetDescendants() do
+                    if sub:IsA("TouchTransmitter") or sub:IsA("Script") or sub:IsA("LocalScript") then
+                        pcall(function() sub:Destroy() end)
+                    end
+                    if sub:IsA("BasePart") then
+                        sub.Transparency = 0.5
+                        sub.CanCollide = false
+                        sub.CanTouch = false
+                        sub.Anchored = true
+                    end
+                end
+                clone.Parent = clonesFolder
+            end
+
+            pcall(function() child:Destroy() end)
+        end
+
+        local function isInsideLimboKill(pos)
+            for _, data in next, limboKillData do
+                local relativePos = data.CFrame:PointToObjectSpace(pos)
+                local halfSize = data.Size / 2
+                if math.abs(relativePos.X) < (halfSize.X + 6) and
+                   math.abs(relativePos.Y) < (halfSize.Y + 6) and
+                   math.abs(relativePos.Z) < (halfSize.Z + 6) then
+                    return true
+                end
+            end
+            return false
+        end
+
+        limboEscapeConnection = RunService.Heartbeat:Connect(function()
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+
+            local nearLimbo = isInsideLimboKill(root.Position)
+            setCharacterCanTouch(not nearLimbo)
+        end)
+
+        for _, child in next, Workspace:GetDescendants() do
+            if child.Name == "LimboKill" then tryDisable(child) end
+        end
+
+        Workspace.DescendantAdded:Connect(function(child)
+            if limboEnabled and child.Name == "LimboKill" then
+                tryDisable(child)
+            end
+        end)
     end
 })
 
@@ -392,11 +349,14 @@ BypassGroup:AddToggle('AntiEvilFloor', {
 
 local cardBypassEnabled = false
 local dummyEvent = Instance.new("BindableEvent")
+local removeCardEvent = ReplicatedStorage:FindFirstChild("RemoveCard")
+local removeCardOnClientEvent = removeCardEvent and removeCardEvent.OnClientEvent
+
 local oldIndex
 pcall(function()
     oldIndex = hookmetamethod(game, "__index", function(self, key)
         if cardBypassEnabled and not checkcaller() then
-            if self == ReplicatedStorage:FindFirstChild("RemoveCard") and key == "OnClientEvent" then
+            if self == removeCardEvent and key == "OnClientEvent" then
                 return dummyEvent.Event
             end
         end
@@ -408,7 +368,7 @@ local oldFiresignal
 if firesignal then
     pcall(function()
         oldFiresignal = hookfunction(firesignal, function(event, ...)
-            if cardBypassEnabled and event == ReplicatedStorage:FindFirstChild("RemoveCard").OnClientEvent then
+            if cardBypassEnabled and event == removeCardOnClientEvent then
                 return
             end
             return oldFiresignal(event, ...)
@@ -486,32 +446,46 @@ local function isBossAimingAtPlayer()
     return bossRoot.CFrame.LookVector:Dot(toPlayer) > 0.6
 end
 
+local bossConnection
 BypassGroup:AddToggle('AntiBossDamage', {
     Text = 'Disable Boss Damage',
     Default = false,
     Callback = function(Value)
         bossEnabled = Value
+        if bossConnection then bossConnection:Disconnect() ; bossConnection = nil end
         if bossShootConnection then bossShootConnection:Disconnect() ; bossShootConnection = nil end
+
         if Value then
-            task.spawn(function()
-                while bossEnabled do
-                    if not Workspace:IsDescendantOf(game) then break end
-                    safeDelete(Workspace:FindFirstChild("PoisonCylinder"))
-                    safeDelete(Workspace:FindFirstChild("Laser"))
-                    safeDelete(Workspace:FindFirstChild("BossHurt"))
-                    safeDelete(Workspace:FindFirstChild("PoisonBall"))
-                    local bomb = getNil("ExploderBomb", "Part")
-                    if bomb then safeDelete(bomb) end
-                    task.wait(0.2)
+            local bossDamageNames = {
+                PoisonCylinder = true,
+                Laser = true,
+                BossHurt = true,
+                PoisonBall = true
+            }
+            bossConnection = Workspace.DescendantAdded:Connect(function(child)
+                if bossDamageNames[child.Name] then
+                    safeDelete(child)
                 end
             end)
 
-            -- Watch for boss Shoot animation playing and evade if aimed at us
+            for _, child in next, Workspace:GetDescendants() do
+                if bossDamageNames[child.Name] then
+                    safeDelete(child)
+                end
+            end
+
+            task.spawn(function()
+                while bossEnabled do
+                    local bomb = getNil("ExploderBomb", "Part")
+                    if bomb then safeDelete(bomb) end
+                    task.wait(1)
+                end
+            end)
+
             local function hookShootAnim()
                 local boss = Workspace:FindFirstChild("LimboBoss", true)
                 local bossMain = boss and boss:FindFirstChild("Main", true)
                 if not bossMain then return false end
-                -- Find the Humanoid to get its Animator
                 local hum = bossMain:FindFirstChildOfClass("Humanoid")
                     or bossMain:FindFirstChild("Humanoid", true)
                 local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:FindFirstChild("Animator", true))
@@ -527,7 +501,6 @@ BypassGroup:AddToggle('AntiBossDamage', {
                 return true
             end
 
-            -- Try immediately, then poll until LimboBoss + animator exist
             if not hookShootAnim() then
                 task.spawn(function()
                     while bossEnabled do
@@ -1129,6 +1102,7 @@ local roomTPData = {
     {"Room 201", "201SP"},
     {"Room 202", "202SP"},
     {"Room 203", "203SP"},
+    {"Room 245", "245SP"},
     {"Room 301", "301SP"},
     {"Room 302", "302SP"},
     {"Room 303", "303SP"},
@@ -1242,6 +1216,20 @@ AutoGroup:AddButton({
             Library:Notify("Claimed " .. tostring(claimedCount) .. " keycard(s)!", 3)
         else
             Library:Notify("CardsOnDesk not found!", 3)
+        end
+    end
+})
+
+AutoGroup:AddButton({
+    Text = 'Call Phone',
+    Func = function()
+        local phoneClick = Workspace:FindFirstChild("PhoneClick", true)
+        local cd = phoneClick and phoneClick:FindFirstChildOfClass("ClickDetector")
+        if cd then
+            fireclickdetector(cd)
+            Library:Notify("Called Phone!", 3)
+        else
+            Library:Notify("Phone ClickDetector not found or inactive!", 3)
         end
     end
 })
