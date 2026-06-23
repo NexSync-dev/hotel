@@ -6,4 +6,4 @@ anti limbo is kind of broken,the game does have some serversided checks if your 
 
 elevator spam has a problem where it could kick you if you spam too much however i think that has been fixed
 
-```loadstring(game:HttpGet("https://raw.githubusercontent.com/NexSync-dev/hotel/refs/heads/main/main.lua"))()´´´
+``` loadstring(game:HttpGet("https://raw.githubusercontent.com/NexSync-dev/hotel/refs/heads/main/main.lua"))() ´´´
